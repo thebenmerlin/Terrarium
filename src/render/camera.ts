@@ -52,9 +52,9 @@ export function createViewport(app: Application, worldWidth: number, worldHeight
   app.stage.addChild(viewport);
 
   viewport
-    .drag()
-    .pinch()
-    .wheel({ wheelZoom: false, trackpadPinch: true })
+    .drag({ pressDrag: true })
+    .pinch({ axis: "all" })
+    .wheel({ wheelZoom: true, percent: 0.1, trackpadPinch: true })
     .decelerate({ friction: 0.9 })
     .clampZoom({ minScale: MIN_ZOOM, maxScale: MAX_ZOOM })
     .bounce({ sides: "all", underflow: "center" });
@@ -76,5 +76,94 @@ export function createViewport(app: Application, worldWidth: number, worldHeight
     viewport.resize(app.screen.width, app.screen.height, worldWidth, worldHeight);
   });
 
+  setupKeyboardNavigation(app, viewport);
+
   return viewport;
 }
+
+function setupKeyboardNavigation(app: Application, viewport: Viewport): void {
+  const keysPressed = new Set<string>();
+
+  const onKeyDown = (e: KeyboardEvent) => {
+    if (
+      document.activeElement instanceof HTMLInputElement ||
+      document.activeElement instanceof HTMLTextAreaElement ||
+      (document.activeElement as HTMLElement)?.isContentEditable
+    ) {
+      return;
+    }
+    keysPressed.add(e.key);
+    keysPressed.add(e.code);
+  };
+
+  const onKeyUp = (e: KeyboardEvent) => {
+    keysPressed.delete(e.key);
+    keysPressed.delete(e.code);
+  };
+
+  const onBlur = () => {
+    keysPressed.clear();
+  };
+
+  window.addEventListener("keydown", onKeyDown);
+  window.addEventListener("keyup", onKeyUp);
+  window.addEventListener("blur", onBlur);
+
+  app.ticker.add((ticker) => {
+    if (keysPressed.size === 0) return;
+
+    const dt = Math.min(ticker.deltaMS / 1000, 0.1);
+    if (dt <= 0) return;
+
+    let moveX = 0;
+    let moveY = 0;
+    let zoomChange = 0;
+
+    const hasKey = (...keys: string[]) => keys.some((k) => keysPressed.has(k));
+
+    // Directional navigation (^ v < >, Arrow keys, WASD)
+    if (hasKey("ArrowUp", "w", "W", "KeyW", "^")) moveY -= 1;
+    if (hasKey("ArrowDown", "s", "S", "KeyS", "v", "V")) moveY += 1;
+    if (hasKey("ArrowLeft", "a", "A", "KeyA")) moveX -= 1;
+    if (hasKey("ArrowRight", "d", "D", "KeyD")) moveX += 1;
+
+    // Zoom / forward-backward navigation (< >, +, -, PageUp, PageDown)
+    if (hasKey("+", "=", "Equal", "PageUp", "i", "I", "KeyI")) zoomChange += 1;
+    if (hasKey("-", "_", "Minus", "PageDown", "o", "O", "KeyO")) zoomChange -= 1;
+
+    // Direct support for < (KeyComma / Comma) and > (KeyPeriod / Period)
+    if (hasKey("<", ",")) {
+      if (hasKey("Shift") || hasKey("<")) {
+        zoomChange -= 1; // Backward / zoom out
+      } else {
+        moveX -= 1; // Left
+      }
+    }
+    if (hasKey(">", ".")) {
+      if (hasKey("Shift") || hasKey(">")) {
+        zoomChange += 1; // Forward / zoom in
+      } else {
+        moveX += 1; // Right
+      }
+    }
+
+    // Apply smooth position movement
+    if (moveX !== 0 || moveY !== 0) {
+      const len = Math.hypot(moveX, moveY);
+      const speed = 600 / viewport.scale.x; // pan speed in world units per second
+      const dx = (moveX / len) * speed * dt;
+      const dy = (moveY / len) * speed * dt;
+
+      viewport.moveCenter(viewport.center.x + dx, viewport.center.y + dy);
+    }
+
+    // Apply smooth zoom change
+    if (zoomChange !== 0) {
+      const zoomFactor = 1 + zoomChange * 1.5 * dt;
+      const currentScale = viewport.scale.x;
+      const targetScale = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, currentScale * zoomFactor));
+      viewport.setZoom(targetScale, true);
+    }
+  });
+}
+
